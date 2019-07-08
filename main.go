@@ -5,11 +5,74 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 )
+
+type ScoreLine int
+
+const (
+	Ones ScoreLine = iota
+	Twos
+	Threes
+	Fours
+	Fives
+	Sixes
+	ThreeOfAKind
+	FourOfAKind
+	SmallStraight
+	LargeStraight
+	FullHouse
+	Yahtzee
+	Chance
+	ScoreLineCount
+	ScoreLineMin = Ones
+	ScoreLineMax = Chance
+
+	UpperSectionMin   = Ones
+	UpperSectionMax   = Sixes
+	UpperSectionCount = 1 + (UpperSectionMax - UpperSectionMin)
+	LowerSectionMin   = ThreeOfAKind
+	LowerSectionMax   = Chance
+	LowerSectionCount = 1 + (LowerSectionMax - LowerSectionMin)
+)
+
+var everyRoll []Roll
+
+var scoreStats [ScoreLineCount]Stats
+
+func init() {
+	var allRolls = make(map[Roll]struct{})
+
+	for a := One; a <= Six; a++ {
+		for b := One; b <= Six; b++ {
+			for c := One; c <= Six; c++ {
+				for d := One; d <= Six; d++ {
+					for e := One; e <= Six; e++ {
+						var roll Roll
+						roll[a]++
+						roll[b]++
+						roll[c]++
+						roll[d]++
+						roll[e]++
+						allRolls[roll] = struct{}{}
+					}
+				}
+			}
+		}
+	}
+
+	for r, _ := range allRolls {
+		everyRoll = append(everyRoll, r)
+	}
+
+	for s := ScoreLineMin; s < ScoreLineCount; s++ {
+		scoreStats[s] = calculateStats(scorers[s], everyRoll)
+	}
+}
 
 type Die uint8
 
@@ -59,6 +122,15 @@ func (r Roll) Empty() bool {
 }
 
 func (r Roll) String() string {
+
+	if r.Empty() {
+		return "empty"
+	}
+
+	if !r.Valid() {
+		return "invld"
+	}
+
 	return strings.Repeat("⚀", int(r[0])) +
 		strings.Repeat("⚁", int(r[1])) +
 		strings.Repeat("⚂", int(r[2])) +
@@ -83,53 +155,50 @@ func (r Rolls) FinalRoll() Roll {
 	return r.FirstRoll
 }
 
-type ScoreCardUpperSection struct {
-	Ones   OnesScorer
-	Twos   TwosScorer
-	Threes ThreesScorer
-	Fours  FoursScorer
-	Fives  FivesScorer
-	Sixes  SixesScorer
-}
+type ScoreLines [ScoreLineCount]Roll
 
-func (u ScoreCardUpperSection) UpperSectionBaseScore() int {
+func (u ScoreLines) UpperSectionBaseScore() int {
 	total := 0
-	total += u.Ones.Score()
-	total += u.Twos.Score()
-	total += u.Threes.Score()
-	total += u.Fours.Score()
-	total += u.Fives.Score()
-	total += u.Sixes.Score()
+	total += ScoreOnes(u[Ones])
+	total += ScoreTwos(u[Twos])
+	total += ScoreThrees(u[Threes])
+	total += ScoreFours(u[Fours])
+	total += ScoreFives(u[Fives])
+	total += ScoreSixes(u[Sixes])
 	return total
 }
 
-func (u ScoreCardUpperSection) UpperSectionBonus() int {
+func (u ScoreLines) UpperSectionBonus() int {
 	if u.UpperSectionBaseScore() > 63 {
-		// TODO: check upper section bonus score
 		return 35
 	}
 	return 0
 }
 
-func (u ScoreCardUpperSection) UpperSectionTotal() int {
+func (u ScoreLines) UpperSectionTotal() int {
 	return u.UpperSectionBaseScore() + u.UpperSectionBonus()
 }
 
-type ScoreCardLowerSection struct {
-	ThreeOfAKind  ThreeOfAKindScorer
-	FourOfAKind   FourOfAKindScorer
-	SmallStraight SmallStraightScorer
-	LargeStraight LargeStraightScorer
-	Flush         FlushScorer
-	Yahtzee       YahtzeeScorer
-	Chance        ChanceScorer
+func (u ScoreLines) LowerSectionTotal() int {
+	total := 0
+	total += ScoreThreeOfAKind(u[ThreeOfAKind])
+	total += ScoreFourOfAKind(u[FourOfAKind])
+	total += ScoreSmallStraight(u[SmallStraight])
+	total += ScoreLargeStraight(u[LargeStraight])
+	total += ScoreFullHouse(u[FullHouse])
+	total += ScoreYahtzee(u[Yahtzee])
+	total += ScoreChance(u[Chance])
+	return total
 }
 
 type ScoreCardColumn struct {
 	Name string
-	ScoreCardUpperSection
-	ScoreCardLowerSection
+	ScoreLines
 	BonusYahtzee [3]bool
+}
+
+func (s ScoreCardColumn) Total() int {
+	return s.UpperSectionTotal() + s.LowerSectionTotal()
 }
 
 type ScoreCard struct {
@@ -151,56 +220,60 @@ func (s ScoreCard) writeRow(wr io.Writer, name string, rowText func(ScoreCardCol
 	return err
 }
 
+func (s ScoreCard) writeScore(wr io.Writer, name string, line ScoreLine) {
+	s.writeRow(wr, name, func(col ScoreCardColumn) string {
+		roll := col.ScoreLines[line]
+		score := scorers[line](roll)
+		stats := scoreStats[line]
+		return fmt.Sprintf("%d (%s) (%.2f)", score, roll, stats.Percentile(score))
+	})
+}
+
 func (s ScoreCard) writeHeader(wr io.Writer, name string) error {
-	_, err := fmt.Fprintln(wr, name+"\t")
+	_, err := fmt.Fprintln(wr, name+"\t"+strings.Repeat("--\t", len(s.Columns)))
 	return err
 }
 
 func (s ScoreCard) String() string {
 	buf := new(bytes.Buffer)
-	wr := tabwriter.NewWriter(buf, 0, 1, 1, ' ', 0)
+	wr := tabwriter.NewWriter(buf, 0, 1, 1, ' ', tabwriter.AlignRight)
 	s.writeHeader(wr, "Score")
-	s.writeHeader(wr, "--------")
 
 	s.writeHeader(wr, "Upper Section")
-
 	s.writeRow(wr, "Name", func(col ScoreCardColumn) string {
 		return col.Name
 	})
-
-	s.writeRow(wr, "Ones", func(col ScoreCardColumn) string {
-		return strconv.Itoa(col.Ones.Score())
-	})
-	s.writeRow(wr, "Twos", func(col ScoreCardColumn) string {
-		return strconv.Itoa(col.Twos.Score())
-	})
-	s.writeRow(wr, "Threes", func(col ScoreCardColumn) string {
-		return strconv.Itoa(col.Threes.Score())
-	})
-	s.writeRow(wr, "Fours", func(col ScoreCardColumn) string {
-		return strconv.Itoa(col.Fours.Score())
-	})
-	s.writeRow(wr, "Fives", func(col ScoreCardColumn) string {
-		return strconv.Itoa(col.Fives.Score())
-	})
-	s.writeRow(wr, "Sixes", func(col ScoreCardColumn) string {
-		return strconv.Itoa(col.Sixes.Score())
-	})
-
+	s.writeScore(wr, "Ones", Ones)
+	s.writeScore(wr, "Twos", Twos)
+	s.writeScore(wr, "Threes", Threes)
+	s.writeScore(wr, "Fours", Fours)
+	s.writeScore(wr, "Fives", Fives)
+	s.writeScore(wr, "Sixes", Sixes)
 	s.writeRow(wr, "SubTotal", func(col ScoreCardColumn) string {
 		return strconv.Itoa(col.UpperSectionBaseScore())
 	})
-
 	s.writeRow(wr, "Bonus", func(col ScoreCardColumn) string {
 		return strconv.Itoa(col.UpperSectionBonus())
 	})
-
-	s.writeRow(wr, "Total", func(col ScoreCardColumn) string {
+	s.writeRow(wr, "Total Score", func(col ScoreCardColumn) string {
 		return strconv.Itoa(col.UpperSectionTotal())
 	})
 
 	s.writeHeader(wr, "Lower Section")
-
+	s.writeScore(wr, "3 of a Kind", ThreeOfAKind)
+	s.writeScore(wr, "4 of a Kind", FourOfAKind)
+	s.writeScore(wr, "Full House", FullHouse)
+	s.writeScore(wr, "SM Straight", SmallStraight)
+	s.writeScore(wr, "LG Straight", LargeStraight)
+	s.writeScore(wr, "Yahtzee", Yahtzee)
+	s.writeScore(wr, "Chance", Chance)
+	s.writeRow(wr, "SubTotal", func(col ScoreCardColumn) string {
+		return strconv.Itoa(col.LowerSectionTotal())
+	})
+	s.writeRow(wr, "Total", func(col ScoreCardColumn) string {
+		return strconv.Itoa(col.Total())
+	})
+	// TODO: Bonus
 	wr.Flush()
 	return buf.String()
 }
@@ -215,26 +288,119 @@ func randomRoll(r *rand.Rand) Roll {
 	return roll
 }
 
-func main() {
-	rnd := rand.New(rand.NewSource(time.Now().Unix()))
-	var scoreCard = ScoreCard{
-		Columns: []ScoreCardColumn{
-			{
-				Name: "P1",
-				ScoreCardUpperSection: ScoreCardUpperSection{
-					Ones:   OnesScorer{randomRoll(rnd)},
-					Twos:   TwosScorer{randomRoll(rnd)},
-					Threes: ThreesScorer{randomRoll(rnd)},
-					Fours:  FoursScorer{randomRoll(rnd)},
-					Fives:  FivesScorer{randomRoll(rnd)},
-					Sixes:  SixesScorer{randomRoll(rnd)},
-				},
-			},
-			{
-				Name: "P2",
-			},
-		},
+func makeRandomMove(getRoll func() Roll, column *ScoreCardColumn, rolls int) {
+	roll := getRoll()
+
+	for s := Ones; s < ScoreLineCount; s++ {
+		if column.ScoreLines[s].Empty() {
+			column.ScoreLines[s] = roll
+			break
+		}
+	}
+}
+
+func makeGreedyMove(getRoll func() Roll, column *ScoreCardColumn, rolls int) {
+	roll := getRoll()
+
+	maxScore := -1
+	maxIndex := -1
+	for i := range column.ScoreLines {
+		if candidateScore := scorers[i](roll); candidateScore > maxScore {
+			maxScore = candidateScore
+			maxIndex = i
+		}
 	}
 
+	column.ScoreLines[maxIndex] = roll
+}
+
+func makeRareMove(getRoll func() Roll, column *ScoreCardColumn, rolls int) {
+	roll := getRoll()
+
+	maxScore := -1.0
+	maxIndex := -1
+	for i, existingRoll := range column.ScoreLines {
+		if !existingRoll.Empty() {
+			continue
+		}
+
+		score := scorers[i](roll)
+		pct := scoreStats[i].Percentile(score)
+		weight := pct * float64(score)
+		if weight > maxScore {
+			maxScore = weight
+			maxIndex = i
+		}
+	}
+	if maxScore == 0 && rolls < 3 {
+		makeRareMove(getRoll, column, rolls+1)
+		return
+	}
+
+	column.ScoreLines[maxIndex] = roll
+}
+
+func main() {
+	var randomScoreCard = runGame("Random", makeRandomMove)
+	var greedyScoreCard = runGame("Greedy", makeGreedyMove)
+	var rareScoreCard = runGame("Rare", makeRareMove)
+
+	var scoreCard = ScoreCard{
+		Columns: []ScoreCardColumn{randomScoreCard, greedyScoreCard, rareScoreCard},
+	}
 	fmt.Println(scoreCard)
+}
+
+type AI func(getRoll func() Roll, column *ScoreCardColumn, rolls int)
+
+func runGame(name string, ai AI) ScoreCardColumn {
+	rnd := rand.New(rand.NewSource(time.Now().Unix()))
+	getRoll := func() Roll {
+		return randomRoll(rnd)
+	}
+	col := ScoreCardColumn{Name: name}
+	for i := 0; i < 13; i++ {
+		ai(getRoll, &col, 1)
+	}
+	return col
+}
+
+type Stats struct {
+	scores []int
+}
+
+func (s Stats) Min() int {
+	return s.scores[0]
+}
+
+func (s Stats) Max() int {
+	return s.scores[len(s.scores)-1]
+}
+
+func (s Stats) Median() int {
+	medianIndex := len(s.scores) / 2
+	return s.scores[medianIndex]
+}
+
+func (s Stats) Percentile(score int) float64 {
+	for i, d := range s.scores {
+		if d >= score {
+			return float64(i) / float64(len(s.scores))
+		}
+	}
+	return 1
+}
+
+func printStats(name string, scorer func(Roll) int, rolls []Roll) {
+	stats := calculateStats(scorer, rolls)
+	fmt.Println(name, stats.Min(), stats.Median(), stats.Max())
+}
+
+func calculateStats(scorer func(Roll) int, rolls []Roll) Stats {
+	var scores []int
+	for _, r := range rolls {
+		scores = append(scores, scorer(r))
+	}
+	sort.Ints(scores)
+	return Stats{scores}
 }

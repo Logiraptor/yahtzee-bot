@@ -1,62 +1,52 @@
 package main
 
-type OnesScorer struct {
-	Roll
+type ScoreFunc func(r Roll) int
+
+var scorers = [ScoreLineCount]ScoreFunc{
+	Ones:          ScoreOnes,
+	Twos:          ScoreTwos,
+	Threes:        ScoreThrees,
+	Fours:         ScoreFours,
+	Fives:         ScoreFives,
+	Sixes:         ScoreSixes,
+	ThreeOfAKind:  ScoreThreeOfAKind,
+	FourOfAKind:   ScoreFourOfAKind,
+	SmallStraight: ScoreSmallStraight,
+	LargeStraight: ScoreLargeStraight,
+	FullHouse:     ScoreFullHouse,
+	Yahtzee:       ScoreYahtzee,
+	Chance:        ScoreChance,
 }
 
-func (o OnesScorer) Score() int {
+func ScoreOnes(o Roll) int {
 	return o.Ones()
 }
 
-type TwosScorer struct {
-	Roll
-}
-
-func (t TwosScorer) Score() int {
+func ScoreTwos(t Roll) int {
 	return t.Twos() * 2
 }
 
-type ThreesScorer struct {
-	Roll
-}
-
-func (t ThreesScorer) Score() int {
+func ScoreThrees(t Roll) int {
 	return t.Threes() * 3
 }
 
-type FoursScorer struct {
-	Roll
-}
-
-func (f FoursScorer) Score() int {
+func ScoreFours(f Roll) int {
 	return f.Fours() * 4
 }
 
-type FivesScorer struct {
-	Roll
-}
-
-func (f FivesScorer) Score() int {
+func ScoreFives(f Roll) int {
 	return f.Fives() * 5
 }
 
-type SixesScorer struct {
-	Roll
-}
-
-func (s SixesScorer) Score() int {
+func ScoreSixes(s Roll) int {
 	return s.Sixes() * 6
 }
 
-type ThreeOfAKindScorer struct {
-	Roll
-}
-
-func (t ThreeOfAKindScorer) Score() int {
+func ScoreThreeOfAKind(t Roll) int {
 	valid := false
 	sum := 0
-	for _, d := range t.Roll {
-		sum += int(d)
+	for i, d := range t {
+		sum += int(d) * (i + 1)
 		if d >= 3 {
 			valid = true
 		}
@@ -69,15 +59,11 @@ func (t ThreeOfAKindScorer) Score() int {
 	return sum
 }
 
-type FourOfAKindScorer struct {
-	Roll
-}
-
-func (f FourOfAKindScorer) Score() int {
+func ScoreFourOfAKind(f Roll) int {
 	valid := false
 	sum := 0
-	for _, d := range f.Roll {
-		sum += int(d)
+	for i, d := range f {
+		sum += int(d) * (i + 1)
 		if d >= 4 {
 			valid = true
 		}
@@ -90,13 +76,9 @@ func (f FourOfAKindScorer) Score() int {
 	return sum
 }
 
-type SmallStraightScorer struct {
-	Roll
-}
-
-func (s SmallStraightScorer) Score() int {
+func ScoreSmallStraight(s Roll) int {
 	runLength := 0
-	for _, d := range s.Roll {
+	for _, d := range s {
 		if d == 0 {
 			runLength = 0
 		} else {
@@ -104,19 +86,14 @@ func (s SmallStraightScorer) Score() int {
 		}
 	}
 	if runLength >= 4 {
-		// TODO: Check score for small straight
-		return 35
+		return 30
 	}
 	return 0
 }
 
-type LargeStraightScorer struct {
-	Roll
-}
-
-func (l LargeStraightScorer) Score() int {
+func ScoreLargeStraight(l Roll) int {
 	runLength := 0
-	for _, d := range l.Roll {
+	for _, d := range l {
 		if d == 0 {
 			runLength = 0
 		} else {
@@ -124,20 +101,15 @@ func (l LargeStraightScorer) Score() int {
 		}
 	}
 	if runLength >= 5 {
-		// TODO: Check score for large straight
 		return 40
 	}
 	return 0
 }
 
-type FlushScorer struct {
-	Roll
-}
-
-func (f FlushScorer) Score() int {
+func ScoreFullHouse(f Roll) int {
 	foundPair := false
 	foundTriple := false
-	for _, d := range f.Roll {
+	for _, d := range f {
 		if d == 2 {
 			foundPair = true
 		} else if d == 3 {
@@ -145,34 +117,24 @@ func (f FlushScorer) Score() int {
 		}
 	}
 	if foundPair && foundTriple {
-		// TODO: Check score for flush
-		return 40
+		return 25
 	}
 	return 0
 }
 
-type YahtzeeScorer struct {
-	Roll
-}
-
-func (y YahtzeeScorer) Score() int {
-	for _, d := range y.Roll {
+func ScoreYahtzee(y Roll) int {
+	for _, d := range y {
 		if d == 5 {
-			// TODO: check score for yahtzee
 			return 50
 		}
 	}
 	return 0
 }
 
-type ChanceScorer struct {
-	Roll
-}
-
-func (c ChanceScorer) Score() int {
+func ScoreChance(c Roll) int {
 	sum := 0
-	for _, d := range c.Roll {
-		sum += int(d)
+	for i, d := range c {
+		sum += int(d) * (i + 1)
 	}
 	return sum
 }
